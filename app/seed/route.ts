@@ -2,11 +2,14 @@ import bcrypt from 'bcryptjs';
 import postgres from 'postgres';
 import { invoices, customers, revenue, users } from '../lib/placeholder-data';
 
+// Define the type for the postgres instance
+type PostgresType = ReturnType<typeof postgres>;
+
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' });
 
-async function seedUsers() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
-  await sql`
+async function seedUsers(transaction: PostgresType) {
+  await transaction`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+  await transaction`
     CREATE TABLE IF NOT EXISTS users (
       id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -18,7 +21,7 @@ async function seedUsers() {
   const insertedUsers = await Promise.all(
     users.map(async (user) => {
       const hashedPassword = await bcrypt.hash(user.password, 10);
-      return sql`
+      return transaction`
         INSERT INTO users (id, name, email, password)
         VALUES (${user.id}, ${user.name}, ${user.email}, ${hashedPassword})
         ON CONFLICT (id) DO NOTHING;
@@ -29,10 +32,10 @@ async function seedUsers() {
   return insertedUsers;
 }
 
-async function seedInvoices() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+async function seedInvoices(transaction: PostgresType) {
+  await transaction`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
 
-  await sql`
+  await transaction`
     CREATE TABLE IF NOT EXISTS invoices (
       id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
       customer_id UUID NOT NULL,
@@ -44,7 +47,7 @@ async function seedInvoices() {
 
   const insertedInvoices = await Promise.all(
     invoices.map(
-      (invoice) => sql`
+      (invoice) => transaction`
         INSERT INTO invoices (customer_id, amount, status, date)
         VALUES (${invoice.customer_id}, ${invoice.amount}, ${invoice.status}, ${invoice.date})
         ON CONFLICT (id) DO NOTHING;
@@ -55,10 +58,10 @@ async function seedInvoices() {
   return insertedInvoices;
 }
 
-async function seedCustomers() {
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+async function seedCustomers(transaction: PostgresType) {
+  await transaction`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
 
-  await sql`
+  await transaction`
     CREATE TABLE IF NOT EXISTS customers (
       id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
@@ -69,7 +72,7 @@ async function seedCustomers() {
 
   const insertedCustomers = await Promise.all(
     customers.map(
-      (customer) => sql`
+      (customer) => transaction`
         INSERT INTO customers (id, name, email, image_url)
         VALUES (${customer.id}, ${customer.name}, ${customer.email}, ${customer.image_url})
         ON CONFLICT (id) DO NOTHING;
@@ -80,8 +83,8 @@ async function seedCustomers() {
   return insertedCustomers;
 }
 
-async function seedRevenue() {
-  await sql`
+async function seedRevenue(transaction: PostgresType) {
+  await transaction`
     CREATE TABLE IF NOT EXISTS revenue (
       month VARCHAR(4) NOT NULL UNIQUE,
       revenue INT NOT NULL
@@ -90,7 +93,7 @@ async function seedRevenue() {
 
   const insertedRevenue = await Promise.all(
     revenue.map(
-      (rev) => sql`
+      (rev) => transaction`
         INSERT INTO revenue (month, revenue)
         VALUES (${rev.month}, ${rev.revenue})
         ON CONFLICT (month) DO NOTHING;
@@ -103,15 +106,30 @@ async function seedRevenue() {
 
 export async function GET() {
   try {
-    const result = await sql.begin((sql) => [
-      seedUsers(),
-      seedCustomers(),
-      seedInvoices(),
-      seedRevenue(),
-    ]);
+    await sql.begin(async (transaction) => {
+      console.log('Starting database seed...');
+      
+      await seedUsers(transaction);
+      console.log('Users table seeded');
+      
+      await seedCustomers(transaction);
+      console.log('Customers table seeded');
+      
+      await seedInvoices(transaction);
+      console.log('Invoices table seeded');
+      
+      await seedRevenue(transaction);
+      console.log('Revenue table seeded');
+    });
 
     return Response.json({ message: 'Database seeded successfully' });
   } catch (error) {
-    return Response.json({ error }, { status: 500 });
+    console.error('Seed error:', error);
+    return Response.json({ 
+      error: 'Failed to seed database',
+      details: process.env.NODE_ENV === 'development' ? error : undefined 
+    }, { status: 500 });
+  } finally {
+    await sql.end();
   }
 }
